@@ -599,6 +599,11 @@ impl Frame {
         if !from.bytes.is_empty() {
             return Err(Bad("bytes after its end").into());
         }
+        // A submission's lists are places in `lists`, used as they are.
+        let lists = frame.lists.len();
+        if frame.submits.iter().flat_map(|s| &s.lists).any(|&l| l != MISSING && l as usize >= lists) {
+            return Err(Bad("a submission of a list it does not hold").into());
+        }
         Ok(frame)
     }
 }
@@ -981,6 +986,43 @@ pub(crate) mod tests {
         frame.write(&path).unwrap();
         assert_eq!(Frame::read(&path).unwrap(), frame);
         std::fs::write(&path, b"VICFRAMEnothing at all").unwrap();
+        assert!(Frame::read(&path).is_err());
+    }
+
+    #[test]
+    fn a_submission_of_a_list_not_there_is_refused() {
+        let frame = |lists: Vec<u32>| Frame {
+            adapter: String::new(),
+            vendor: 0,
+            device: 0,
+            notes: Vec::new(),
+            heaps: Vec::new(),
+            resources: Vec::new(),
+            roots: Vec::new(),
+            codes: Vec::new(),
+            pipelines: Vec::new(),
+            signatures: Vec::new(),
+            descriptor_heaps: Vec::new(),
+            query_heaps: Vec::new(),
+            lists: vec![List {
+                kind: 0,
+                commands: Blob(Vec::new()),
+            }],
+            submits: vec![Submit {
+                frame: 0,
+                lists,
+                deltas: Vec::new(),
+                views: Vec::new(),
+            }],
+            contents: Vec::new(),
+            presents: Vec::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("frame.bin");
+        frame(vec![0, MISSING]).write(&path).unwrap();
+        assert!(Frame::read(&path).is_ok());
+        // The listing and the replay would index past the lists.
+        frame(vec![0, 1]).write(&path).unwrap();
         assert!(Frame::read(&path).is_err());
     }
 }
