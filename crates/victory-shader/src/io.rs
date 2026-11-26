@@ -222,7 +222,13 @@ pub fn raise(p: &Program, native: &NativeProgram) -> Result<Io, ShaderError> {
                         row: i.row,
                         channel,
                     };
-                    loaded.push((Reg::V(i.vgpr + channel), input));
+                    // The VGPR is a byte of the stage data: channels past v255
+                    // would wrap onto v0 and up.
+                    let vgpr = i
+                        .vgpr
+                        .checked_add(channel)
+                        .ok_or(ShaderError::Malformed("vertex input past the last VGPR"))?;
+                    loaded.push((Reg::V(vgpr), input));
                 }
             }
             (loaded, &[][..], &outputs[..])
@@ -888,6 +894,41 @@ mod tests {
             S_ENDPGM,
         ];
         assert_eq!(mesh(&reuse).map(|_| ()), Ok(()));
+    }
+
+    /// Stage data naming an attribute's channels past v255 is refused, not
+    /// wrapped onto v0 and up (or a panic in a debug build).
+    #[test]
+    fn vertex_inputs_past_the_last_vgpr_are_refused() {
+        let vertex = |vgpr, mask| NativeProgram {
+            stage: HwStage::Vs,
+            wave64: false,
+            vgprs: 256,
+            layout: vec![],
+            used: vec![],
+            io: StageIo::Vs {
+                inputs: vec![crate::native::VsInput {
+                    usage: Usage::Generic,
+                    row: 0,
+                    mask,
+                    vgpr,
+                }],
+                outputs: vec![],
+            },
+            code: vec![],
+        };
+        let p = program(&[0x7E02_0301, S_ENDPGM]); // v_mov_b32 v1, v1
+        assert!(raise(&p, &vertex(252, 0xF)).is_ok());
+        assert!(matches!(
+            raise(&p, &vertex(253, 0xF)),
+            Err(ShaderError::Malformed(_))
+        ));
+        assert!(matches!(
+            raise(&p, &vertex(255, 2)),
+            Err(ShaderError::Malformed(_))
+        ));
+        // Only the channels the mask enables count.
+        assert!(raise(&p, &vertex(255, 1)).is_ok());
     }
 
     #[test]
