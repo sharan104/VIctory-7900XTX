@@ -142,6 +142,31 @@ fn verbatim(root: &[u16], tail: &[u16]) -> Vec<u16> {
     out
 }
 
+/// `tail` without each `..` that would climb above the root it is joined
+/// to, as on a drive of its own; the rest is left to the host.
+fn within_root(tail: &[u16]) -> Vec<u16> {
+    let dot = u16::from(b'.');
+    let mut out = Vec::with_capacity(tail.len());
+    let mut depth = 0usize;
+    for part in tail.split_inclusive(|c| SEPARATORS.contains(c)) {
+        let name = match part.split_last() {
+            Some((last, name)) if SEPARATORS.contains(last) => name,
+            _ => part,
+        };
+        match name {
+            [] => {}
+            [d] if *d == dot => {}
+            [d, e] if [*d, *e] == [dot; 2] => match depth.checked_sub(1) {
+                Some(up) => depth = up,
+                None => continue,
+            },
+            _ => depth += 1,
+        }
+        out.extend_from_slice(part);
+    }
+    out
+}
+
 /// The host path, NUL-terminated, for `path` (without its NUL) if it is on
 /// a virtual drive.
 pub(crate) fn translate(path: &[u16]) -> Option<Vec<u16>> {
@@ -165,13 +190,19 @@ pub(crate) fn translate(path: &[u16]) -> Option<Vec<u16>> {
         out.push(0);
         return Some(out);
     }
+    let verbatim = !prefix.is_empty();
+    // The host resolves `..` here, and the root's parent is the root itself.
+    let tail = if verbatim {
+        tail.to_vec()
+    } else {
+        within_root(tail)
+    };
     let mut out = prefix.to_vec();
     out.extend_from_slice(root);
     // `X:` and `X:name` are relative to the root.
     if !tail.first().is_some_and(|c| SEPARATORS.contains(c)) {
         out.push(b'\\'.into());
     }
-    let verbatim = !prefix.is_empty();
     out.extend(tail.iter().map(|&c| {
         if verbatim && c == u16::from(b'/') {
             b'\\'.into()
@@ -881,6 +912,33 @@ mod tests {
         let host = translate(&w(&path)[..path.len()]).map(|v| text(&v));
         let cwd = std::env::current_dir().unwrap();
         assert_eq!(host, Some(cwd.join("a.rpf").display().to_string()));
+    }
+
+    /// A drive's root is its own parent: `..` never leaves the host folder,
+    /// in short paths as in long ones.
+    #[test]
+    fn dot_dot_stays_on_the_drive() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("inner");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(dir.path().join("outside.txt"), b"").unwrap();
+        std::fs::write(folder.join("inside.txt"), b"").unwrap();
+        let letter = mount(&folder).unwrap();
+        let root = folder.display().to_string();
+        let tr = |s: String| translate(&w(&s)[..s.encode_utf16().count()]).map(|v| text(&v));
+        assert_eq!(tr(format!(r"{letter}:\..\a")), Some(format!(r"{root}\a")));
+        assert_eq!(tr(format!("{letter}:../../a")), Some(format!(r"{root}\a")));
+        assert_eq!(tr(format!("{letter}:..")), Some(format!(r"{root}\")));
+        assert_eq!(
+            tr(format!(r"{letter}:\a\.\..\..\b\")),
+            Some(format!(r"{root}\a\.\..\b\"))
+        );
+
+        const INVALID_FILE_ATTRIBUTES: u32 = u32::MAX;
+        let attributes = |p: String| GetFileAttributesW(w(&p).as_ptr());
+        assert_eq!(attributes(format!(r"{letter}:\..\outside.txt")), INVALID_FILE_ATTRIBUTES);
+        assert_ne!(attributes(format!(r"{letter}:\..\inside.txt")), INVALID_FILE_ATTRIBUTES);
+        assert_ne!(attributes(format!("{letter}:/a/../../inside.txt")), INVALID_FILE_ATTRIBUTES);
     }
 
     #[test]
