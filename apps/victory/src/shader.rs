@@ -44,12 +44,17 @@ pub(crate) fn sources(data: &[u8]) -> Vec<Source<'_>> {
     if sgd5::is_sgd5(data) {
         out.extend(sgd5::records(data).map(Source::Packed));
     }
-    let raw = memchr::memmem::find_iter(data, b"DXBC")
-        .filter(|&offset| Container::parse(&data[offset..]).is_ok())
-        .map(|offset| Source::Raw {
+    let raw = memchr::memmem::find_iter(data, b"DXBC").filter_map(|offset| {
+        let rest = &data[offset..];
+        Container::parse(rest).ok()?;
+        // The container alone, by the size in its header, as a title passes
+        // it: not the rest of the file, whose hash no run names.
+        let size = u32::from_le_bytes(rest.get(0x18..0x1c)?.try_into().ok()?) as usize;
+        Some(Source::Raw {
             offset,
-            data: &data[offset..],
-        });
+            data: rest.get(..size)?,
+        })
+    });
     out.extend(raw);
     out
 }
@@ -218,4 +223,39 @@ fn format_instruction(i: &Instruction, wave64: bool) -> String {
         None => format!("<{:?} {:#x}>", i.encoding, i.opcode),
     };
     format!("    {:06x}: {:<44} {text}", i.offset, words.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A container of no parts: its header alone.
+    fn container(digest: u8) -> Vec<u8> {
+        let mut c = b"DXBC".to_vec();
+        c.extend([digest; 16]);
+        c.extend([1, 0, 0, 0]);
+        c.extend(0x20u32.to_le_bytes());
+        c.extend(0u32.to_le_bytes());
+        c
+    }
+
+    #[test]
+    fn raw_containers_end_where_their_header_says() {
+        let (a, b) = (container(1), container(2));
+        let file = [&b"head"[..], &a, b"between", &a, &b, b"tail"].concat();
+        let found: Vec<_> = sources(&file)
+            .iter()
+            .map(|s| (s.label(), s.bytes().unwrap().into_owned()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("@0x4".to_owned(), a.clone()),
+                ("@0x2b".to_owned(), a.clone()),
+                ("@0x4b".to_owned(), b.clone()),
+            ]
+        );
+        // As a run hashes the container the title passes: the same at each place.
+        assert_eq!(blake3::hash(&found[0].1), blake3::hash(&found[1].1));
+    }
 }
