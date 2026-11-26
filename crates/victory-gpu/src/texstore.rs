@@ -90,6 +90,8 @@ fn store() -> Option<&'static Store> {
     STORE
         .get_or_init(|| {
             let folder = PathBuf::from(std::env::var_os("VICTORY_TEXTURE_STORE").filter(|v| !v.is_empty() && v != "0")?);
+            // (Not inside a source tree: its files are the title's textures.)
+            let folder = crate::switch::outside_repo("VICTORY_TEXTURE_STORE", folder)?;
             std::fs::create_dir_all(&folder).ok()?;
             let mut index = HashMap::new();
             if let Ok(text) = std::fs::read_to_string(folder.join("index.txt")) {
