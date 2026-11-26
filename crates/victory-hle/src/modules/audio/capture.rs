@@ -66,7 +66,9 @@ pub fn start() {
                 }
             });
     }
-    if std::env::var_os("VICTORY_AUDIO_CAPTURE").is_some()
+    // (Not inside a source tree: the recording is the title's sound.)
+    if let Some(path) = std::env::var_os("VICTORY_AUDIO_CAPTURE")
+        && super::outside_repo("VICTORY_AUDIO_CAPTURE", Path::new(&path))
         && let Err(e) = std::env::current_exe().and_then(|exe| {
             std::process::Command::new(exe)
                 .env(TARGET, std::process::id().to_string())

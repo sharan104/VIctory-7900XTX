@@ -671,13 +671,29 @@ fn decode(context: Context, voice: &mut Voice) -> bool {
     true
 }
 
+/// Whether `path`, which the variable `name` names, is outside every source
+/// tree: what is written there is the title's sound (docs/asset-policy.md).
+/// Said with a warning if not.
+#[cfg(feature = "diagnostics")]
+fn outside_repo(name: &str, path: &std::path::Path) -> bool {
+    match victory_core::ensure_outside_repo(path) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "{name}: not written");
+            false
+        }
+    }
+}
+
 /// `VICTORY_XMA_DUMP=<dir>`: saves the context words (`<n>-<index>.ctx`)
 /// and input buffer 0 (`.xma`) of the first 32 voices enabled, to test
 /// the decoder on a title's streams outside the title.
 #[cfg(feature = "diagnostics")]
 fn dump_input(index: u32, context: Context) {
     static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let Some(dir) = std::env::var_os("VICTORY_XMA_DUMP") else {
+    static DIR: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
+    let dir = DIR.get_or_init(|| std::env::var_os("VICTORY_XMA_DUMP").filter(|d| outside_repo("VICTORY_XMA_DUMP", d.as_ref())));
+    let Some(dir) = dir.clone() else {
         return;
     };
     let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -965,6 +981,16 @@ pub(crate) fn module() -> HleModule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The title's sound is not written inside a source tree, and is outside it.
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn sound_is_not_written_into_the_source_tree() {
+        let inside = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("xma");
+        assert!(!outside_repo("VICTORY_TEST", &inside));
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(outside_repo("VICTORY_TEST", &tmp.path().join("xma")));
+    }
 
     #[test]
     fn heap_maps_every_byte_of_a_block() {
