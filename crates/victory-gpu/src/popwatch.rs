@@ -293,6 +293,7 @@ fn folder() -> Option<&'static PathBuf> {
     FOLDER
         .get_or_init(|| {
             let folder = PathBuf::from(std::env::var_os("VICTORY_POP_FOLDER")?);
+            let folder = crate::switch::outside_repo("VICTORY_POP_FOLDER", folder)?;
             std::fs::create_dir_all(&folder).ok()?;
             Some(folder)
         })

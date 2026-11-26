@@ -72,12 +72,13 @@ fn file() -> Option<&'static Mutex<std::io::BufWriter<std::fs::File>>> {
     static FILE: OnceLock<Option<Mutex<std::io::BufWriter<std::fs::File>>>> = OnceLock::new();
     FILE.get_or_init(|| {
         let path = std::env::var_os("VICTORY_LIGHT_PROBE").filter(|v| !v.is_empty() && v != "0")?;
+        let path = crate::switch::outside_repo("VICTORY_LIGHT_PROBE", path.into())?;
         let mut f = std::io::BufWriter::new(std::fs::File::create(&path).ok()?);
         let _ = writeln!(
             f,
             "frame,ms,avg0,avg1,avg2,avg3,exp,logexp,target,exp3,lux,luxinv,lux2,lux3,in0,in1,in2,in3,samples,title,standin,written,mean_r,mean_g,mean_b"
         );
-        tracing::info!(path = %std::path::Path::new(&path).display(), "light probe: a line a frame (VICTORY_LIGHT_PROBE)");
+        tracing::info!(path = %path.display(), "light probe: a line a frame (VICTORY_LIGHT_PROBE)");
         Some(Mutex::new(f))
     })
     .as_ref()

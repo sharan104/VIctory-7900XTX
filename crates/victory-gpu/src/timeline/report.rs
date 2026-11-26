@@ -773,8 +773,7 @@ pub(super) fn chrome(
 /// Writes both files, if outside every source tree: they hold places in the
 /// title's code (docs/asset-policy.md).
 pub(super) fn write(file: &std::path::Path, data: Data, before: &Threads, after: &Threads, stamps: Vec<(u64, u64)>) {
-    if let Err(error) = victory_core::ensure_outside_repo(file) {
-        tracing::warn!(%error, "VICTORY_TIMELINE: not written");
+    if crate::switch::outside_repo("VICTORY_TIMELINE", file.to_path_buf()).is_none() {
         return;
     }
     let mut names = Names::new();

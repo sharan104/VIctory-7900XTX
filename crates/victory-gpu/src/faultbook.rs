@@ -85,6 +85,8 @@ pub(crate) fn frame() {
     let began = *BEGAN.get_or_init(std::time::Instant::now);
     let Some((file, times)) = SETTINGS.get_or_init(|| {
         let file = std::env::var("VICTORY_FAULT_BOOK").ok().filter(|f| !f.is_empty())?;
+        // (Its files beside it: `<file>.<n>.bin`.)
+        crate::switch::outside_repo("VICTORY_FAULT_BOOK", file.clone().into())?;
         let times = std::env::var("VICTORY_FAULT_BOOK_AT").unwrap_or_else(|_| "150,210,270".into());
         Some((file, times.split(',').filter_map(|t| t.trim().parse().ok()).collect()))
     }) else {

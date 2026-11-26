@@ -15,6 +15,21 @@ pub(crate) fn on(name: &str) -> bool {
     value_is_on(std::env::var_os(name).as_deref())
 }
 
+/// `path`, the file or folder the variable `name` names, if it is outside
+/// every source tree: what is written there comes from the title (its
+/// pictures, memory, shaders or places in its code; docs/asset-policy.md).
+/// Said with a warning if not; callers ask once and keep the answer.
+#[cfg(windows)]
+pub(crate) fn outside_repo(name: &str, path: std::path::PathBuf) -> Option<std::path::PathBuf> {
+    match victory_core::ensure_outside_repo(&path) {
+        Ok(()) => Some(path),
+        Err(error) => {
+            tracing::warn!(%error, "{name}: not written");
+            None
+        }
+    }
+}
+
 /// A switch that is on unless its variable is `0`, read once; with
 /// `VICTORY_AB` naming it (diagnostics builds, `crate::ab`), on and off while
 /// the title runs.
@@ -60,6 +75,16 @@ mod tests {
     #[test]
     fn one_is_on() {
         assert!(value_is_on(Some(OsStr::new("1"))));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nothing_is_written_into_the_source_tree() {
+        let inside = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("frames");
+        assert_eq!(super::outside_repo("VICTORY_TEST", inside), None);
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("frames");
+        assert_eq!(super::outside_repo("VICTORY_TEST", outside.clone()), Some(outside));
     }
 
     #[test]

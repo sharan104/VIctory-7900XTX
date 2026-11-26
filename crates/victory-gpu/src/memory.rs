@@ -1194,7 +1194,9 @@ mod dump {
 
     fn folder() -> Option<&'static std::path::PathBuf> {
         static FOLDER: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
-        FOLDER.get_or_init(|| std::env::var_os("VICTORY_MEMORY_DUMP").map(Into::into)).as_ref()
+        FOLDER
+            .get_or_init(|| crate::switch::outside_repo("VICTORY_MEMORY_DUMP", std::env::var_os("VICTORY_MEMORY_DUMP")?.into()))
+            .as_ref()
     }
 
     fn turn(buffer: &ID3D12Resource, before: D3D12_RESOURCE_STATES, after: D3D12_RESOURCE_STATES) -> D3D12_RESOURCE_BARRIER {

@@ -12,21 +12,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 pub(crate) fn folder() -> Option<&'static PathBuf> {
     static FOLDER: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     FOLDER
-        .get_or_init(|| outside_repo(std::env::var_os("VICTORY_CAPTURE")?.into()))
+        .get_or_init(|| crate::switch::outside_repo("VICTORY_CAPTURE", std::env::var_os("VICTORY_CAPTURE")?.into()))
         .as_ref()
-}
-
-/// `folder`, if it is outside every source tree: what goes there is
-/// pictures of the title's frames and lists of its draws
-/// (docs/asset-policy.md). Said once if not.
-fn outside_repo(folder: PathBuf) -> Option<PathBuf> {
-    match victory_core::ensure_outside_repo(&folder) {
-        Ok(()) => Some(folder),
-        Err(error) => {
-            tracing::warn!(%error, "VICTORY_CAPTURE: nothing saved");
-            None
-        }
-    }
 }
 
 /// Frames listed in `VICTORY_CAPTURE_FRAMES` (comma-separated): saved
@@ -880,15 +867,6 @@ pub(crate) fn recent_levels() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn frames_are_not_saved_into_the_source_tree() {
-        let inside = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("frames");
-        assert_eq!(super::outside_repo(inside), None);
-        let tmp = tempfile::tempdir().unwrap();
-        let outside = tmp.path().join("frames");
-        assert_eq!(super::outside_repo(outside.clone()), Some(outside));
-    }
-
     #[test]
     fn crc_matches_the_png_check_value() {
         assert_eq!(super::crc32(b"IEND"), 0xae42_6082);
