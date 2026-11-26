@@ -283,7 +283,8 @@ impl LoadedImage {
     /// sections with different protections (delay-load tables in `.didat`).
     fn write_slots(&self, slots: &[(u32, usize)]) -> Result<()> {
         for &(rva, address) in slots {
-            let slot = (self.base() + rva as usize) as *mut u64;
+            // As bytes: the PE format does not align the IAT, nor does the parser check it.
+            let slot = (self.base() + rva as usize) as *mut [u8; 8];
             let mut old = 0;
             // SAFETY: the parser only yields slots inside the image.
             if unsafe { VirtualProtect(slot as *const c_void, 8, PAGE_READWRITE, &mut old) } == 0 {
@@ -292,8 +293,8 @@ impl LoadedImage {
                     std::io::Error::last_os_error()
                 );
             }
-            // SAFETY: inside the image, now writable, 8-byte aligned by the PE format.
-            unsafe { slot.write_volatile(address as u64) };
+            // SAFETY: inside the image and now writable; bytes need no alignment.
+            unsafe { slot.write_volatile((address as u64).to_le_bytes()) };
             let mut ignored = 0;
             // SAFETY: restoring the protection we just changed.
             unsafe { VirtualProtect(slot as *const c_void, 8, old, &mut ignored) };
@@ -423,5 +424,40 @@ impl LoadedImage {
         crate::threads::unmapped(self.base());
         // SAFETY: guaranteed by the caller.
         unsafe { FreeLibrary(self.module) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READONLY, VirtualAlloc, VirtualFree,
+    };
+
+    /// The PE format does not make the IAT 8-byte aligned, and the parser does
+    /// not check it: a slot at an odd place is written whole all the same.
+    #[test]
+    fn an_unaligned_iat_slot_is_written() {
+        let exe = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        let info = ImageInfo::parse(&exe).unwrap();
+        // SAFETY: two pages of ours, read-only like an image's import table.
+        let page = unsafe {
+            VirtualAlloc(std::ptr::null(), 0x2000, MEM_COMMIT | MEM_RESERVE, PAGE_READONLY)
+        };
+        assert!(!page.is_null());
+        let image = LoadedImage {
+            module: page.cast(),
+            path: PathBuf::new(),
+            info,
+        };
+        let address = 0x1122_3344_5566_7788;
+        image.write_slots(&[(0x14, address), (0xffc, address)]).unwrap();
+        // SAFETY: the pages are ours and readable.
+        let bytes = unsafe { std::slice::from_raw_parts(page.cast::<u8>(), 0x2000) };
+        assert_eq!(bytes[0x14..0x1c], address.to_le_bytes());
+        // (Across the two pages.)
+        assert_eq!(bytes[0xffc..0x1004], address.to_le_bytes());
+        // SAFETY: releases the pages allocated above.
+        unsafe { VirtualFree(page, 0, MEM_RELEASE) };
     }
 }
