@@ -243,10 +243,7 @@ pub fn run(
     jobs: Option<usize>,
     wave: Option<u32>,
 ) -> Result<()> {
-    // Dumped shaders and validator reports are game-derived (rule #1).
-    if let Some(dir) = std::env::var_os("VICTORY_EMIT_DUMP") {
-        victory_core::ensure_outside_repo(Path::new(&dir))?;
-    }
+    dumps_outside_repo(|name| std::env::var_os(name))?;
     let paths = crate::default_paths(paths)?;
     let host_caps = if pipelines {
         let host = Host::new(false).map_err(anyhow::Error::msg)?;
@@ -403,6 +400,23 @@ pub fn run(
     failed.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
     for (reason, (n, example)) in failed {
         println!("  {n:>7}  {reason}  (e.g. {example})");
+    }
+    Ok(())
+}
+
+/// The folders `run` dumps shaders into, checked first: dumped shaders and
+/// validator reports are game-derived (rule #1).
+fn dumps_outside_repo(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Result<()> {
+    for name in ["VICTORY_EMIT_DUMP", "VICTORY_FAIL_DUMP"] {
+        if let Some(dir) = env(name) {
+            victory_core::ensure_outside_repo(Path::new(&dir))?;
+        }
+    }
+    // `VICTORY_DUMP_MATCH=<dir>;<text>|...`, read as `translate` reads it.
+    if let Some(spec) = env("VICTORY_DUMP_MATCH")
+        && let Some((dir, _)) = spec.to_str().and_then(|s| s.split_once(';'))
+    {
+        victory_core::ensure_outside_repo(Path::new(dir))?;
     }
     Ok(())
 }
@@ -993,5 +1007,30 @@ mod tests {
             ),
             "{err}"
         );
+    }
+
+    /// Every folder `run` dumps containers into is refused in the repo, and
+    /// taken outside it.
+    #[test]
+    fn every_dump_folder_inside_repo_is_refused() {
+        let repo = env!("CARGO_MANIFEST_DIR");
+        let outside = std::env::temp_dir().join("victory-translate-dumps");
+        let outside = outside.display();
+        for (name, inside, elsewhere) in [
+            ("VICTORY_EMIT_DUMP", repo.to_owned(), outside.to_string()),
+            ("VICTORY_FAIL_DUMP", repo.to_owned(), outside.to_string()),
+            ("VICTORY_DUMP_MATCH", format!("{repo};#0011aabb"), format!("{outside};#0011aabb")),
+        ] {
+            let err = super::dumps_outside_repo(|k| (k == name).then(|| inside.clone().into()))
+                .unwrap_err();
+            assert!(
+                matches!(
+                    err.downcast_ref(),
+                    Some(victory_core::PolicyError::InsideRepo { .. })
+                ),
+                "{name}: {err}"
+            );
+            super::dumps_outside_repo(|k| (k == name).then(|| elsewhere.clone().into())).unwrap();
+        }
     }
 }
