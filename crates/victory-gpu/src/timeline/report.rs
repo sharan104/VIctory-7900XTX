@@ -770,8 +770,13 @@ pub(super) fn chrome(
     writeln!(out, "\n]}}")
 }
 
-/// Writes both files.
+/// Writes both files, if outside every source tree: they hold places in the
+/// title's code (docs/asset-policy.md).
 pub(super) fn write(file: &std::path::Path, data: Data, before: &Threads, after: &Threads, stamps: Vec<(u64, u64)>) {
+    if let Err(error) = victory_core::ensure_outside_repo(file) {
+        tracing::warn!(%error, "VICTORY_TIMELINE: not written");
+        return;
+    }
     let mut names = Names::new();
     let (events, lost) = (data.events.len(), data.lost);
     let trace = Trace::new(data.events, &stamps);
@@ -881,6 +886,23 @@ mod tests {
                 (1, 0, 20, OUTSIDE),
             ]
         );
+    }
+
+    /// A timeline holds places in the title's code: never written into the
+    /// source tree, written elsewhere.
+    #[test]
+    fn a_timeline_is_not_written_into_the_source_tree() {
+        let empty = || Data { events: Vec::new(), stacks: Vec::new(), lost: 0 };
+        let inside = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("timeline-test.json");
+        write(&inside, empty(), &Threads::default(), &Threads::default(), Vec::new());
+        let written = [inside.exists(), inside.with_extension("txt").exists()];
+        let _ = std::fs::remove_file(&inside);
+        let _ = std::fs::remove_file(inside.with_extension("txt"));
+        assert_eq!(written, [false, false]);
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("timeline.json");
+        write(&outside, empty(), &Threads::default(), &Threads::default(), Vec::new());
+        assert!(outside.exists() && outside.with_extension("txt").exists());
     }
 
     /// Real threads, real waits: what the wrappers record names who ended
