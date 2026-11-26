@@ -404,9 +404,12 @@ pub fn dump(folder: &Path, text: &str) -> Result<Vec<String>> {
         for part in &p.parts {
             match part {
                 wire::Part::Code { kind, blob } => {
-                    let c = &frame.codes[*blob as usize];
-                    let mut bytes = vec![0; c.len as usize];
-                    read_at(&file, &mut bytes, c.at)?;
+                    // Code the recorder could not write is numbered past them.
+                    let Some(c) = frame.codes.get(*blob as usize) else {
+                        let _ = write!(line, " {kind}=(not recorded)");
+                        continue;
+                    };
+                    let bytes = code(&file, c)?;
                     let name: String = c.hash[..8].iter().map(|b| format!("{b:02x}")).collect();
                     std::fs::write(to.join(format!("{name}.dxil")), bytes)?;
                     let _ = write!(line, " {kind}={name}.dxil");
@@ -966,9 +969,7 @@ impl Player {
                     while let Some(p) = frame.pipelines.get(next.fetch_add(1, Ordering::Relaxed)) {
                         let recorded = |i: u32| {
                             let c = frame.codes.get(i as usize)?;
-                            let mut bytes = vec![0; c.len as usize];
-                            read_at(&file, &mut bytes, c.at).ok()?;
-                            Some(bytes)
+                            code(&file, c).ok()
                         };
                         let root = |id: u32| roots.get(&id).cloned();
                         let taken = std::cell::Cell::new(false);
@@ -3449,6 +3450,18 @@ fn read_at(file: &File, mut to: &mut [u8], mut at: u64) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Shader code of `shaders.bin`. Its place is checked against the file
+/// before anything is made for it.
+fn code(file: &File, c: &wire::Code) -> std::io::Result<Vec<u8>> {
+    let size = file.metadata()?.len();
+    if c.at.checked_add(c.len).is_none_or(|end| end > size) {
+        return Err(std::io::ErrorKind::UnexpectedEof.into());
+    }
+    let mut bytes = vec![0; c.len as usize];
+    read_at(file, &mut bytes, c.at)?;
+    Ok(bytes)
+}
+
 fn make_device(frame: &Frame, debug: bool, breadcrumbs: bool) -> Result<(ID3D12Device, Option<ID3D12InfoQueue>)> {
     // SAFETY: plain creation and queries.
     unsafe {
@@ -3557,6 +3570,58 @@ mod tests {
             find(&dir.path().join("capture-2")).unwrap(),
             dir.path().join("capture-2")
         );
+    }
+
+    #[test]
+    fn shaders_are_dumped_from_what_the_capture_holds() {
+        let frame = |len: u64| Frame {
+            adapter: String::new(),
+            vendor: 0,
+            device: 0,
+            notes: Vec::new(),
+            heaps: Vec::new(),
+            resources: Vec::new(),
+            roots: Vec::new(),
+            codes: vec![wire::Code {
+                at: 0,
+                len,
+                hash: [0xab; 32],
+            }],
+            pipelines: vec![wire::Pipeline {
+                id: 1,
+                parts: vec![
+                    wire::Part::Code { kind: 18, blob: 0 },
+                    // As the recorder numbers code it could not write.
+                    wire::Part::Code {
+                        kind: 23,
+                        blob: u32::MAX,
+                    },
+                ],
+                name: "a pipeline".into(),
+            }],
+            signatures: Vec::new(),
+            descriptor_heaps: Vec::new(),
+            query_heaps: Vec::new(),
+            lists: Vec::new(),
+            submits: Vec::new(),
+            contents: Vec::new(),
+            presents: Vec::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("shaders.bin"), b"DXBC").unwrap();
+        frame(4).write(&dir.path().join("frame.bin")).unwrap();
+        let lines = dump(dir.path(), "a pipeline").unwrap();
+        assert_eq!(
+            lines,
+            ["pipeline 1 a pipeline: 18=abababababababab.dxil 23=(not recorded)"]
+        );
+        let dxil = dir.path().join("shaders/abababababababab.dxil");
+        assert_eq!(std::fs::read(dxil).unwrap(), b"DXBC");
+        // Code past the end of the file is refused, not made room for.
+        frame(5).write(&dir.path().join("frame.bin")).unwrap();
+        assert!(dump(dir.path(), "a pipeline").is_err());
+        frame(u64::MAX).write(&dir.path().join("frame.bin")).unwrap();
+        assert!(dump(dir.path(), "a pipeline").is_err());
     }
 
     #[test]
