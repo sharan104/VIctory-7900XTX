@@ -796,6 +796,15 @@ impl Memory {
 /// A list with this key ([`HostList::used`]) asks the builder for sizes.
 const SIZES: usize = usize::MAX - (9 << 33);
 
+/// A list's key ([`HostList::first_use`]) for the dword of title memory at
+/// `at` made ready to be written (`kind` 4) or to come back (5): one of its
+/// own for every address below 4 TiB (the console's have 40 bits), clear of
+/// the other keys. (With 31 bits of the dword, addresses 8 GiB apart were
+/// one: the second was left closed, or did not come back.)
+fn dword_key(kind: usize, at: u64) -> usize {
+    usize::MAX - (kind << 40) - (at >> 2) as usize
+}
+
 /// Whether a submission that asks for the sizes of structures is waited for,
 /// and landed, before the title goes on (`VICTORY_BVH_SIZES_WAIT=1`; off).
 ///
@@ -986,11 +995,11 @@ pub(crate) fn ready(
             });
             m.bring_up(list);
         }
-        if builds && written.contains(&at) && list.first_use(usize::MAX - (4 << 33) - (at >> 2 & 0x7FFF_FFFF) as usize) {
+        if builds && written.contains(&at) && list.first_use(dword_key(4, at)) {
             if let Some((start, len)) = crate::shadow::in_buffer(at, 1)
                 && len <= BACK
                 && use_ == (Use::Builds { back: true })
-                && list.first_use(usize::MAX - (5 << 33) - (start >> 2 & 0x7FFF_FFFF) as usize)
+                && list.first_use(dword_key(5, start))
             {
                 m.small(list, start, len);
             }
@@ -1300,5 +1309,21 @@ mod tests {
         assert_eq!(packed_len(header(0x8102_0007, 5)), None);
         assert_eq!(packed_len(header(0x8102_0006, 0)), None);
         assert_eq!(packed_len(header(0x8102_0006, 1 << 21)), None);
+    }
+
+    #[test]
+    fn addresses_8_gib_apart_have_keys_of_their_own() {
+        let at = 0x1_0001_0000u64;
+        let others = [at + (8 << 30), at + (24 << 30), (1 << 40) - 4];
+        for kind in [4, 5] {
+            for other in others {
+                assert_ne!(dword_key(kind, at), dword_key(kind, other));
+            }
+            // A dword's bytes are one.
+            assert_eq!(dword_key(kind, at), dword_key(kind, at + 3));
+        }
+        // Kinds apart, and clear of the keys of 33 bits below usize::MAX.
+        assert!(dword_key(5, 1 << 32) < dword_key(4, (1 << 40) - 4));
+        assert!(dword_key(4, 1 << 32) < usize::MAX - (10 << 33));
     }
 }
