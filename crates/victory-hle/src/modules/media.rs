@@ -89,12 +89,20 @@ fn local(url: &[u16]) -> Result<Vec<u16>, (String, String)> {
             }
             None => (rest, false),
         };
-        let whole = percent_decode(path);
+        // After a host, the host drops one of two leading separators:
+        // `file://localhost//movies` is `\movies`, but
+        // `file://localhost///server` and `file://localhost/%5Cserver` are
+        // `\\server`.
+        let whole = percent_decode(if this_machine && share(path) {
+            &path[1..]
+        } else {
+            path
+        });
         let path = percent_decode(path.trim_start_matches(['/', '\\'])).replace('/', "\\");
         if !drive(&path) {
-            // With no host named, a path that starts with two separators
-            // names one: `file:////server/share` is `\\server\share`.
-            if !this_machine && share(&whole) {
+            // A path that starts with two separators names a share:
+            // `file:////server/share` is `\\server\share`.
+            if share(&whole) {
                 return Err((scheme, host_of(whole.trim_start_matches(['/', '\\']))));
             }
             // A local file without a drive: the host resolves it as is.
@@ -554,18 +562,21 @@ mod tests {
     }
 
     /// Other spellings of `\\server\share\a.mp4`, as paths and as `file:`
-    /// URLs without a host.
+    /// URLs without a host or naming this machine.
     const SHARE_PATHS: [&str; 3] = [
         r"/\server\share\a.mp4",
         r"\/server/share/a.mp4",
         r"\??\UNC\server\share\a.mp4",
     ];
-    const SHARE_URLS: [&str; 5] = [
+    const SHARE_URLS: [&str; 8] = [
         "file:////server/share/a.mp4",
         "file://///server/share/a.mp4",
         r"file:\\server\share\a.mp4",
         "file:/%5Cserver/share/a.mp4",
         "file:///%5C%5Cserver/share/a.mp4",
+        "file://localhost///server/share/a.mp4",
+        "file://localhost/%5Cserver/share/a.mp4",
+        r"file://localhost/\\server/share/a.mp4",
     ];
 
     #[test]
@@ -585,6 +596,7 @@ mod tests {
             "file:///movies/a.mp4",
             r"\??\C:\Windows\a.wav",
             "file://localhost//server/share/a.mp4",
+            r"file://localhost\\server\share\a.mp4",
         ] {
             assert_eq!(asked(local_file), Ok(local_file.into()), "{local_file}");
         }
@@ -627,6 +639,10 @@ mod tests {
         // And of the ones that pass: local paths.
         assert_eq!(
             host_path("file://localhost//server/share/a.mp4"),
+            r"\server\share\a.mp4"
+        );
+        assert_eq!(
+            host_path(r"file://localhost\\server\share\a.mp4"),
             r"\server\share\a.mp4"
         );
         assert_eq!(host_path("file:////C:/Windows/a.wav"), r"C:\Windows\a.wav");
