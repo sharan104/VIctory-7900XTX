@@ -200,16 +200,26 @@ fn format(g: &Guid) -> [u8; 36] {
 }
 
 /// A GUID from its text, with or without braces and the dashes in place.
-fn parse(mut chars: impl Iterator<Item = impl Into<u32>>) -> Option<Guid> {
+fn parse(chars: impl Iterator<Item = impl Into<u32>>) -> Option<Guid> {
+    const OPEN: u32 = b'{' as u32;
+    const CLOSE: u32 = b'}' as u32;
+    let chars: Vec<u32> = chars.map(Into::into).collect();
+    // Braces come in a pair or not at all.
+    let text = match chars.as_slice() {
+        [OPEN, text @ .., CLOSE] => text,
+        text => text,
+    };
+    if text.len() != 36 {
+        return None;
+    }
     let mut digits = [0u8; 32];
     let mut n = 0;
-    for c in &mut chars {
-        let c = c.into();
-        if n == 32 {
-            // Only the closing brace may follow the last digit.
-            return (c == u32::from(b'}')).then(|| assemble(&digits));
-        }
-        if c == u32::from(b'-') || (n == 0 && c == u32::from(b'{')) {
+    for (i, &c) in text.iter().enumerate() {
+        // `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`: dashes there and only there.
+        if matches!(i, 8 | 13 | 18 | 23) {
+            if c != u32::from(b'-') {
+                return None;
+            }
             continue;
         }
         let digit = match c {
@@ -221,7 +231,7 @@ fn parse(mut chars: impl Iterator<Item = impl Into<u32>>) -> Option<Guid> {
         digits[n] = digit as u8;
         n += 1;
     }
-    (n == 32).then(|| assemble(&digits))
+    Some(assemble(&digits))
 }
 
 fn assemble(digits: &[u8; 32]) -> Guid {
@@ -336,6 +346,27 @@ mod tests {
             parse(b"1234abcd-00ef-4a5b-8012-3456789abcdeZ".iter().copied()),
             None
         );
+    }
+
+    /// `UuidFromString` takes the dashed form only: no text after the
+    /// closing brace, no brace without its pair, the dashes in place.
+    #[test]
+    fn malformed_guid_text_is_refused() {
+        for text in [
+            "1234abcd-00ef-4a5b-8012-3456789abcde}junk",
+            "{1234abcd-00ef-4a5b-8012-3456789abcde}junk",
+            "1234abcd-00ef-4a5b-8012-3456789abcde}",
+            "{1234abcd-00ef-4a5b-8012-3456789abcde",
+            "{{1234abcd-00ef-4a5b-8012-3456789abcde}",
+            "1234abcd00ef4a5b80123456789abcde",
+            "12-34abcd00ef-4a5b-8012-3456789abcde",
+            "1234abcd-00ef-4a5b-80123-456789abcde",
+            "-1234abcd-00ef-4a5b-8012-3456789abcde",
+        ] {
+            let mut g = Guid::new(0, 0, 0, [0; 8]);
+            let c = std::ffi::CString::new(text).unwrap();
+            assert_eq!(UuidFromStringA(c.as_ptr(), &mut g), INVALID_STRING_UUID, "{text}");
+        }
     }
 
     #[test]
